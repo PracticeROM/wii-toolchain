@@ -1,0 +1,166 @@
+prefix                        = @prefix@
+exec_prefix                   = @exec_prefix@
+bindir                        = @bindir@
+srcdir                        = @srcdir@
+target                        = powerpc-eabi
+BINUTILS_VERSION              = @BINUTILS_VERSION@
+GCC_VERSION                   = @GCC_VERSION@
+NEWLIB_VERSION                = @NEWLIB_VERSION@
+GDB_VERSION                   = @GDB_VERSION@
+BINUTILS_URL                  = https://ftp.gnu.org/gnu/binutils/$(BINUTILS_VERSION).tar.xz
+GCC_URL                       = https://ftp.gnu.org/gnu/gcc/$(GCC_VERSION)/$(GCC_VERSION).tar.xz
+NEWLIB_URL                    = https://sourceware.org/pub/newlib/$(NEWLIB_VERSION).tar.gz
+GDB_URL                       = https://ftp.gnu.org/gnu/gdb/$(GDB_VERSION).tar.xz
+BINUTILS_SUBDIRS              = bfd binutils cpu gas ld libctf libsframe opcodes
+NEWLIB_SUBDIRS                = libgloss newlib
+GDB_SUBDIRS                   = gdb gdbsupport gnulib readline sim
+BINUTILS_SYMLINKS             = $(BINUTILS_SUBDIRS:%=$(GCC_VERSION)/%)
+NEWLIB_SYMLINKS               = $(NEWLIB_SUBDIRS:%=$(GCC_VERSION)/%)
+GDB_SYMLINKS                  = $(GDB_SUBDIRS:%=$(GCC_VERSION)/%)
+GCC_IN_TREE_DEPS              = @GCC_IN_TREE_DEPS@
+CONFIG_TOOLCHAIN              = @CONFIG_TOOLCHAIN@
+LDFLAGS                       = @LDFLAGS@
+CFLAGS_FOR_TARGET             = @CFLAGS_FOR_TARGET@
+CXXFLAGS_FOR_TARGET           = @CXXFLAGS_FOR_TARGET@
+MKDIR_P                       = @MKDIR_P@
+WGET                          = @WGET@
+
+all:
+
+.PHONY: all install clean distclean FORCE
+.PHONY: src-all clean-src-binutils clean-src-gcc clean-src-newlib clean-src-gdb clean-src-all
+.PHONY: symlinks-binutils symlinks-newlib symlinks-gdb symlinks-all clean-symlinks-binutils clean-symlinks-newlib clean-symlinks-gdb clean-symlinks-all
+.PHONY: prepare-toolchain configure-toolchain clean-toolchain
+
+all: toolchain-all
+
+install: toolchain-install
+
+clean: clean-src-all clean-toolchain
+
+distclean:
+	rm -f config.log config.status makefile
+
+FORCE:
+
+%/:
+	$(MKDIR_P) $(@)
+
+src-binutils:
+	$(WGET) - "$(BINUTILS_URL)" | tar xJ
+	touch $(@)
+
+src-gcc:
+	$(WGET) - "$(GCC_URL)" | tar xJ
+	if [ x"$(GCC_IN_TREE_DEPS)" = x"yes" ]; then \
+		cd $(GCC_VERSION) && ./contrib/download_prerequisites; \
+	fi
+	for d in $(BINUTILS_SUBDIRS); do \
+		sed -i s@module_srcdir=$${d}\\b@module_srcdir=../$(BINUTILS_VERSION)/$${d}@g $(GCC_VERSION)/Makefile.in; \
+	done
+	for d in $(NEWLIB_SUBDIRS); do \
+		sed -i s@module_srcdir=$${d}\\b@module_srcdir=../$(NEWLIB_VERSION)/$${d}@g $(GCC_VERSION)/Makefile.in; \
+	done
+	for d in $(GDB_SUBDIRS); do \
+		sed -i s@module_srcdir=$${d}\\b@module_srcdir=../$(GDB_VERSION)/$${d}@g $(GCC_VERSION)/Makefile.in; \
+	done
+	touch $(@)
+
+src-newlib:
+	$(WGET) - "$(NEWLIB_URL)" | tar xz
+	if patch --dry-run -d $(NEWLIB_VERSION) -p 1 <"$(srcdir)/config/newlib/fix-libgloss.diff"; then \
+		patch -d $(NEWLIB_VERSION) -p 1 <"$(srcdir)/config/newlib/fix-libgloss.diff"; \
+	fi
+	touch $(@)
+
+src-gdb:
+	$(WGET) - "$(GDB_URL)" | tar xJ
+	touch $(@)
+
+src-all: src-binutils src-gcc src-newlib src-gdb
+
+clean-src-binutils:
+	rm -rf $(BINUTILS_VERSION)
+	rm -f src-binutils
+
+clean-src-gcc:
+	rm -rf $(GCC_VERSION)
+	rm -f src-gcc
+
+clean-src-newlib:
+	rm -rf $(NEWLIB_VERSION)
+	rm -f src-newlib
+
+clean-src-gdb:
+	rm -rf $(GDB_VERSION)
+	rm -f src-gdb
+
+clean-src-all: clean-src-binutils clean-src-gcc clean-src-newlib clean-src-gdb
+
+$(BINUTILS_SYMLINKS): src-binutils | $(GCC_VERSION)/
+	cd $(GCC_VERSION) && ln -sf $(@:$(GCC_VERSION)/%=../$(BINUTILS_VERSION)/%) $(@:$(GCC_VERSION)/%=./%)
+	touch $(@)
+
+$(NEWLIB_SYMLINKS): src-newlib | $(GCC_VERSION)/
+	cd $(GCC_VERSION) && ln -sf $(@:$(GCC_VERSION)/%=../$(NEWLIB_VERSION)/%) $(@:$(GCC_VERSION)/%=./%)
+	touch $(@)
+
+$(GDB_SYMLINKS): src-gdb | $(GCC_VERSION)/
+	cd $(GCC_VERSION) && ln -sf $(@:$(GCC_VERSION)/%=../$(GDB_VERSION)/%) $(@:$(GCC_VERSION)/%=./%)
+	touch $(@)
+
+symlinks-binutils: | $(BINUTILS_SYMLINKS)
+
+symlinks-newlib: | $(NEWLIB_SYMLINKS)
+
+symlinks-gdb: | $(GDB_SYMLINKS)
+
+symlinks-all: symlinks-binutils symlinks-newlib symlinks-gdb
+
+clean-symlinks-binutils:
+	rm -f $(BINUTILS_SYMLINKS)
+
+clean-symlinks-newlib:
+	rm -f $(NEWLIB_SYMLINKS)
+
+clean-symlinks-gdb:
+	rm -f $(GDB_SYMLINKS)
+
+clean-symlinks-all: clean-symlinks-binutils clean-symlinks-newlib clean-symlinks-gdb
+
+prepare-toolchain: src-all symlinks-all
+
+configure-toolchain: build-toolchain/config.status
+
+build-toolchain/config.status: src-binutils src-gcc src-newlib src-gdb
+build-toolchain/config.status: | $(BINUTILS_SYMLINKS) $(NEWLIB_SYMLINKS) $(GDB_SYMLINKS)
+build-toolchain/config.status: | build-toolchain/
+	cd build-toolchain && ../$(GCC_VERSION)/configure \
+		--prefix="$(prefix)" \
+		--target=$(target) \
+		--with-gnu-as \
+		--with-gnu-ld \
+		--with-cpu=750 \
+		--with-newlib \
+		--enable-newlib-global-atexit \
+		--disable-newlib-fvwrite-in-streamio \
+		--disable-newlib-wide-orient \
+		--disable-newlib-unbuf-stream-opt \
+		--disable-newlib-supplied-syscalls \
+		--enable-lite-exit \
+		--with-native-system-header-dir="//usr/include" \
+		--enable-languages=c,c++,lto \
+		--enable-sjlj-exceptions \
+		--disable-multilib \
+		--disable-threads \
+		--disable-nls \
+		LDFLAGS="$(LDFLAGS)" \
+		CFLAGS_FOR_TARGET="$(CFLAGS_FOR_TARGET)" \
+		CXXFLAGS_FOR_TARGET="$(CXXFLAGS_FOR_TARGET)" \
+		$(CONFIG_TOOLCHAIN)
+
+toolchain-%: build-toolchain/config.status FORCE
+	cd build-toolchain && $(MAKE) $(@:toolchain-%=%)
+
+clean-toolchain:
+	rm -rf build-toolchain
